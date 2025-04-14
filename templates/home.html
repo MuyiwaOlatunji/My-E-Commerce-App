@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home - E-commerce Store</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>E-commerce Store</h1>
+            <nav>
+                <a href="{{ url_for('home') }}"><i class="fas fa-home"></i> Home</a>
+                <a href="{{ url_for('cart') }}"><i class="fas fa-shopping-cart"></i> Cart {% if cart_count > 0 %}({{ cart_count }}){% endif %}</a>
+                <a href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt"></i> Logout</a>
+            </nav>
+        </div>
+    </header>
+    <div class="container">
+        <h2>Welcome to Our Store</h2>
+        <div class="product-grid">
+            {% for product in products %}
+                <div class="product-card">
+                    <h3>{{ product[1] }}</h3>
+                    <p>${{ "%.2f" | format(product[2]) }} | {{ product[3] }}</p>
+                    <p>Stock: {{ product[4] }}</p>
+                    <form method="post" action="{{ url_for('buy', product_id=product[0]) }}">
+                        <input type="number" name="quantity" value="1" min="1" max="{{ product[4] }}">
+                        <button type="submit"><i class="fas fa-cart-plus"></i> Add to Cart</button>
+                    </form>
+                </div>
+            {% endfor %}
+        </div>
+        {% if recommendations %}
+            <div class="recommendations">
+                <h3>Recommended for You</h3>
+                <div class="product-grid">
+                    {% for product in recommendations %}
+                        <div class="product-card">
+                            <h3>{{ product[1] }}</h3>
+                            <p>${{ "%.2f" | format(product[2]) }} | {{ product[3] }}</p>
+                            <p>Stock: {{ product[4] }}</p>
+                            <form method="post" action="{{ url_for('buy', product_id=product[0]) }}">
+                                <input type="number" name="quantity" value="1" min="1" max="{{ product[4] }}">
+                                <button type="submit"><i class="fas fa-cart-plus"></i> Add to Cart</button>
+                            </form>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+    </div>
+    <div class="toast" id="toast"></div>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

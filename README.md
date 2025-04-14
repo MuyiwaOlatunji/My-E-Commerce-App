@@ -1,0 +1,1 @@
+This is a web app project. We are building an Online E-commerce web application.
