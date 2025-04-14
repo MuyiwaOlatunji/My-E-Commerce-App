@@ -1,23 +1,22 @@
 import os
+import sqlite3
 import psycopg2
-from flask import Flask, render_template, request, session, redirect, url_for, jsonify
+from flask import Flask, session, render_template, request, redirect, url_for, jsonify
 from datetime import datetime
-import random
-from collections import defaultdict
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY')
+app.secret_key = os.environ.get('SECRET_KEY', '5507e4842f2c53c15f4a3bbd1e004e6ef59eb7007920c29d1c2b1bc133d90336')
 if not app.secret_key:
     raise ValueError("No SECRET_KEY set. Please set it in environment variables.")
 
 # PostgreSQL Database Connection
 def get_db_connection():
-    try:
+    if os.environ.get('DATABASE_URL'):
         conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-        return conn
-    except psycopg2.Error as e:
-        print(f"Error connecting to database: {e}")
-        raise
+    else:
+        conn = sqlite3.connect('ecommerce.db')
+    return conn
 
 def init_db():
     conn = get_db_connection()
