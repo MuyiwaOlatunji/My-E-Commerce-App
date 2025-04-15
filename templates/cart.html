@@ -1,48 +1,34 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cart - E-commerce Store</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-</head>
-<body>
-    <header>
-        <div class="container">
-            <h1>E-commerce Store</h1>
-            <nav>
-                <a href="{{ url_for('home') }}"><i class="fas fa-home"></i> Home</a>
-                <a href="{{ url_for('cart') }}"><i class="fas fa-shopping-cart"></i> Cart {% if cart_count > 0 %}({{ cart_count }}){% endif %}</a>
-                <a href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt"></i> Logout</a>
-            </nav>
-        </div>
-    </header>
-    <div class="container">
-        <h2>Your Cart</h2>
-        {% if cart_items %}
-            <div class="product-grid">
-                {% for item in cart_items %}
-                    <div class="product-card">
-                        <h3>{{ item[1] }}</h3>
-                        <p>${{ "%.2f" | format(item[2]) }} | {{ item[3] }}</p>
-                        <p>Quantity: {{ item[4] }}</p>
-                        <p>Stock: {{ item[5] }}</p>
-                    </div>
-                {% endfor %}
-            </div>
-            <div style="margin-top: 20px; text-align: center;">
-                <button id="checkout-btn" class="btn"><i class="fas fa-check-circle"></i> Proceed to Checkout</button>
-                <a href="{{ url_for('home') }}" class="btn"><i class="fas fa-arrow-left"></i> Continue Shopping</a>
-            </div>
-        {% else %}
-            <p style="text-align: center; margin: 40px 0;">Your cart is empty.</p>
-            <div style="text-align: center;">
-                <a href="{{ url_for('home') }}" class="btn"><i class="fas fa-arrow-left"></i> Shop Now</a>
-            </div>
-        {% endif %}
-    </div>
-    <div class="toast" id="toast"></div>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Cart{% endblock %}
+{% block content %}
+<h2>Your Cart</h2>
+{% if cart_items %}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Product</th>
+            <th>Price</th>
+            <th>Category</th>
+            <th>Quantity</th>
+            <th>Total</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in cart_items %}
+        <tr>
+            <td>{{ item['name'] }}</td>
+            <td>${{ item['price'] }}</td>
+            <td>{{ item['category'] }}</td>
+            <td>{{ item['quantity'] }}</td>
+            <td>${{ item['price'] * item['quantity'] }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<form action="{{ url_for('checkout') }}" method="POST">
+    <button type="submit" class="btn btn-success">Checkout</button>
+</form>
+{% else %}
+<p>Your cart is empty.</p>
+{% endif %}
+{% endblock %}
