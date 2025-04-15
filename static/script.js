@@ -20,29 +20,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 if (data.success) {
                     // Update cart count
-                    const cartLink = document.querySelector('a[href="/cart"]');
+                    const cartLink = document.querySelector('.navbar-nav a[href="/cart"]');
                     if (cartLink) {
-                        const currentCount = parseInt(cartLink.textContent.match(/\((\d+)\)/)?.[1] || 0);
-                        const newCount = currentCount + parseInt(formData.get('quantity'));
-                        cartLink.innerHTML = `<i class="fas fa-shopping-cart"></i> Cart ${newCount > 0 ? `(${newCount})` : ''}`;
+                        const currentText = cartLink.textContent;
+                        const currentCount = currentText.includes('(') 
+                            ? parseInt(currentText.match(/\((\d+)\)/)?.[1] || 0)
+                            : 0;
+                        const newCount = currentCount + parseInt(formData.get('quantity') || 1);
+                        cartLink.textContent = `Cart${newCount > 0 ? ` (${newCount})` : ''}`;
                     }
                 }
             } catch (error) {
-                showToast('An error occurred', 'error');
+                console.error('Add to cart error:', error);
+                showToast('Failed to add to cart', 'error');
             }
         });
     });
 
-    // Handle Checkout button
-    const checkoutBtn = document.getElementById('checkout-btn');
-    if (checkoutBtn) {
-        checkoutBtn.addEventListener('click', async () => {
+    // Handle Checkout form
+    const checkoutForm = document.querySelector('form[action="/checkout"]');
+    if (checkoutForm) {
+        checkoutForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
             try {
                 const response = await fetch('/checkout', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
+                    method: 'POST'
                 });
                 const data = await response.json();
                 
@@ -50,9 +53,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 if (data.success) {
                     // Update cart count to 0
-                    const cartLink = document.querySelector('a[href="/cart"]');
+                    const cartLink = document.querySelector('.navbar-nav a[href="/cart"]');
                     if (cartLink) {
-                        cartLink.innerHTML = `<i class="fas fa-shopping-cart"></i> Cart`;
+                        cartLink.textContent = 'Cart';
                     }
                     // Reload page to show empty cart
                     setTimeout(() => {
@@ -60,7 +63,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     }, 2000);
                 }
             } catch (error) {
-                showToast('An error occurred during checkout', 'error');
+                console.error('Checkout error:', error);
+                showToast('Checkout failed', 'error');
             }
         });
     }
@@ -68,6 +72,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function showToast(message, type) {
     const toast = document.getElementById('toast');
+    if (!toast) {
+        console.warn('Toast element not found');
+        return;
+    }
     toast.textContent = message;
     toast.className = `toast ${type}`;
     toast.style.display = 'block';
