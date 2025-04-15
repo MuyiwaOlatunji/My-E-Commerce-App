@@ -9,7 +9,8 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', '5507e4842f2c53c15f4a3bbd1e004e6ef59eb7007920c29d1c2b1bc133d90336')
 if not app.secret_key:
     raise ValueError("No SECRET_KEY set. Please set it in environment variables.")
-
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////opt/render/project/src/ecommerce.db'
 # Database Connection (SQLite or PostgreSQL)
 def get_db_connection():
     try:
