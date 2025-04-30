@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <h2>Payment</h2>
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+    
+    {% if address %}
+        <p>Please send the payment to the following address using {{ crypto }}:</p>
+        <p><strong>{{ address }}</strong></p>
+        <p data-payment-id="{{ payment_id }}">Payment ID: {{ payment_id }}</p>
+        <p>After completing the payment, you will be redirected to the home page to continue shopping.</p>
+    {% else %}
+        <h3>Order Details (ID: {{ order.id }})</h3>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in order_items %}
+                    <tr>
+                        <td>
+                            {% if item.image %}
+                                <img src="{{ item.image }}" alt="{{ item.name }}" style="width: 50px; height: 50px;">
+                            {% endif %}
+                            {{ item.name }}
+                        </td>
+                        <td>${{ "%.2f"|format(item.price) }}</td>
+                        <td>{{ item.quantity }}</td>
+                        <td>${{ "%.2f"|format(item.price * item.quantity) }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <h3>Total: ${{ "%.2f"|format(order.total_price) }}</h3>
+        
+        <form method="post">
+            {{ form.csrf_token }}
+            <label for="crypto">Select Cryptocurrency:</label>
+            {{ form.crypto(class="form-control", style="width: 200px;") }}
+            {% if form.crypto.errors %}
+                <div class="error">
+                    {% for error in form.crypto.errors %}
+                        <span>{{ error }}</span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            <br>
+            {{ form.submit(class="btn btn-primary") }}
+        </form>
+        <p>Please send the payment to the following address using {{ crypto }}:</p>
+<p><strong>{{ address }}</strong></p>
+<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={{ address }}" alt="QR Code for Payment">
+    {% endif %}
+</div>
+{% endblock %}

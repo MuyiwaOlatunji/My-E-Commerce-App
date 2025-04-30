@@ -1,34 +1,46 @@
 {% extends "base.html" %}
-{% block title %}Cart{% endblock %}
+
 {% block content %}
-<h2>Your Cart</h2>
-{% if cart_items %}
-<table class="table">
-    <thead>
-        <tr>
-            <th>Product</th>
-            <th>Price</th>
-            <th>Category</th>
-            <th>Quantity</th>
-            <th>Total</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for item in cart_items %}
-        <tr>
-            <td>{{ item['name'] }}</td>
-            <td>${{ item['price'] }}</td>
-            <td>{{ item['category'] }}</td>
-            <td>{{ item['quantity'] }}</td>
-            <td>${{ item['price'] * item['quantity'] }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-<form action="{{ url_for('checkout') }}" method="POST">
-    <button type="submit" class="btn btn-success">Checkout</button>
-</form>
-{% else %}
-<p>Your cart is empty.</p>
-{% endif %}
+<div class="container">
+    <h2>Your Cart</h2>
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+    {% if cart_items %}
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    <th>Category</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in cart_items %}
+                    <tr>
+                        <td>
+                            {% if item.image %}
+                                <img src="{{ item.image }}" alt="{{ item.name }}" style="width: 50px; height: 50px;">
+                            {% endif %}
+                            {{ item.name }}
+                        </td>
+                        <td>{{ item.category }}</td>
+                        <td>${{ "%.2f"|format(item.price) }}</td>
+                        <td>{{ item.quantity }}</td>
+                        <td>${{ "%.2f"|format(item.price * item.quantity) }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <h3>Total: ${{ "%.2f"|format(total) }}</h3>
+        <form action="{{ url_for('checkout') }}" method="post">
+            {{ form.csrf_token }}
+            {{ form.submit(class="btn btn-primary", disabled=is_cart_empty) }}
+        </form>
+    {% else %}
+        <p>Cart empty, <a href="{{ url_for('home') }}">continue shopping</a>.</p>
+    {% endif %}
+</div>
 {% endblock %}

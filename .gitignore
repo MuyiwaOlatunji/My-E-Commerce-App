@@ -1,13 +1,32 @@
-# Virtual environment
+# .gitignore
+
+# Python virtual environment
+mye-app/
 venv/
 env/
 
 # Python cache files
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Environment variables
 .env
 
-# System files
+# SQLite database
+ecommerce.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# OS-generated files
+.DS_Store
 Thumbs.db
