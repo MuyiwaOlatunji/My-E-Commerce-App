@@ -53,11 +53,5 @@
                 </div>
             {% endif %}
             <br>
-            {{ form.submit(class="btn btn-primary") }}
-        </form>
-        <p>Please send the payment to the following address using {{ crypto }}:</p>
-<p><strong>{{ address }}</strong></p>
-<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={{ address }}" alt="QR Code for Payment">
-    {% endif %}
 </div>
 {% endblock %}
