@@ -2,36 +2,12 @@
 {% block title %}Home{% endblock %}
 {% block content %}
 <div class="container">
-    <h2>Products</h2>
     <form action="{{ url_for('search') }}" method="GET" class="mb-4">
         <div class="input-group">
             <input type="text" name="q" class="form-control" placeholder="Search products" aria-label="Search products">
             <button type="submit" class="btn btn-primary">Search</button>
         </div>
     </form>
-
-    <!-- Full Product List -->
-    <div class="row mb-5">
-        {% for product in products %}
-        <div class="col-md-4 col-sm-6 mb-4">
-            <div class="card h-100">
-                {% if product.image %}
-                <img src="{{ product.image }}" class="card-img-top" alt="{{ product.name }}">
-                {% endif %}
-                <div class="card-body">
-                    <h5 class="card-title">{{ product.name }}</h5>
-                    <p class="card-text">${{ product.price }} | {{ product.category }}</p>
-                    <form action="{{ url_for('buy', product_id=product.id) }}" method="POST">
-                        <input type="number" name="quantity" value="1" min="1" max="{{ product.stock }}" class="form-control mb-2" style="width: 100px;">
-                        <button type="submit" class="btn btn-primary w-100">Add to Cart</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-        {% else %}
-        <p>No products available.</p>
-        {% endfor %}
-    </div>
 
     <!-- Recommended Products Section -->
     <div class="mb-5">
@@ -46,7 +22,7 @@
                     {% endif %}
                     <div class="card-body">
                         <h5 class="card-title">{{ product.name }}</h5>
-                        <p class="card-text">${{ product.price }} | {{ product.category }}</p>
+                        <p class="card-text">${{ "%.2f" | format(product.price) }} | {{ product.category }}</p>
                         <form action="{{ url_for('buy', product_id=product.id) }}" method="POST">
                             <input type="number" name="quantity" value="1" min="1" max="999" class="form-control mb-2" style="width: 100px;">
                             <button type="submit" class="btn btn-primary w-100">Add to Cart</button>
@@ -57,8 +33,32 @@
             {% endfor %}
         </div>
         {% else %}
-        <p>No recommendations available.</p>
+        <p>No recommendations available. Browse our <a href="{{ url_for('search') }}">products</a>!</p>
         {% endif %}
+    </div>
+
+    <!-- Full Product List -->
+    <h2>Products</h2>
+    <div class="row mb-5">
+        {% for product in products %}
+        <div class="col-md-4 col-sm-6 mb-4">
+            <div class="card h-100">
+                {% if product.image %}
+                <img src="{{ product.image }}" class="card-img-top" alt="{{ product.name }}">
+                {% endif %}
+                <div class="card-body">
+                    <h5 class="card-title">{{ product.name }}</h5>
+                    <p class="card-text">${{ "%.2f" | format(product.price) }} | {{ product.category }}</p>
+                    <form action="{{ url_for('buy', product_id=product.id) }}" method="POST">
+                        <input type="number" name="quantity" value="1" min="1" max="{{ product.stock }}" class="form-control mb-2" style="width: 100px;">
+                        <button type="submit" class="btn btn-primary w-100">Add to Cart</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <p>No products available.</p>
+        {% endfor %}
     </div>
 </div>
 {% endblock %}

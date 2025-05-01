@@ -2,16 +2,17 @@ import os
 import sqlite3
 import psycopg2
 from flask import Flask, session, render_template, request, redirect, url_for, jsonify, make_response
-from datetime import datetime
+from flask_wtf.csrf import CSRFProtect
+from flask_caching import Cache
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
 import torch
 import torch.nn as nn
 import numpy as np
 import requests
 from dotenv import load_dotenv
-from flask_wtf.csrf import CSRFProtect
 import uuid
-from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm # Import forms
+from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm
 
 load_dotenv()
 
@@ -21,11 +22,15 @@ if not app.secret_key:
     raise ValueError("No SECRET_KEY set.")
 csrf = CSRFProtect(app)
 
+# Initialize caching
+app.config['CACHE_TYPE'] = 'SimpleCache'
+cache = Cache(app)
+
 # Database Connection
 def get_db_connection():
     try:
         conn = sqlite3.connect('ecommerce.db')
-        conn.row_factory = sqlite3.Row  # Enable row factory for dictionary-like access
+        conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
         print(f"Database connection error: {e}")
@@ -212,20 +217,18 @@ def home():
             return redirect(url_for('login'))
         c.execute('SELECT * FROM products WHERE stock > 0')
         products = c.fetchall()
-        print("Products fetched for home page:", [(p['name'], p['image']) for p in products])  # Debug
+        print("Products fetched for home page:", [(p['name'], p['image']) for p in products])
         conn.close()
         cart_count = get_cart_count()
-        # Fetch recommendations directly
-        rec_response = recommendations()  # Call the endpoint function directly
-        if isinstance(rec_response, tuple):  # Handle (response, status) tuple
-            rec_data = rec_response[0].get_json()  # Use get_json() for Flask response
+        rec_response = recommendations()
+        if isinstance(rec_response, tuple):
+            rec_data = rec_response[0].get_json()
             status = rec_response[1]
             if status != 200:
                 print(f"Recommendations failed with status {status}: {rec_data}")
                 rec_data = []
         else:
             rec_data = rec_response.get_json()
-        # Validate recommendations format
         if not isinstance(rec_data, list):
             print(f"Invalid recommendations format: {rec_data}")
             rec_data = []
@@ -233,7 +236,7 @@ def home():
             print(f"Recommendations error: {rec_data[0]['error']}")
             rec_data = []
         else:
-            print("Recommendations with images:", [(r['name'], r.get('image', '')) for r in rec_data])  # Debug
+            print("Recommendations with images:", [(r['name'], r.get('image', '')) for r in rec_data])
         response = render_template('home.html', products=products, recommendations=rec_data, cart_count=cart_count)
         response = make_response(response)
         response.headers['Cache-Control'] = 'public, max-age=60'
@@ -265,18 +268,17 @@ def search():
 def cart():
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    print(f"Fetching cart for user_id: {session['user_id']}")  # Debug
-    form = CheckoutForm()  # Add form
+    print(f"Fetching cart for user_id: {session['user_id']}")
+    form = CheckoutForm()
     try:
         conn = get_db_connection()
         if conn is None:
             return render_template('error.html', error='Database connection failed', cart_count=0)
         c = conn.cursor()
         
-        # Step 1: Check cart entries for the user
         c.execute('SELECT * FROM cart WHERE user_id = ?', (session['user_id'],))
         cart_entries = c.fetchall()
-        print(f"Raw cart entries: {cart_entries}")  # Debug
+        print(f"Raw cart entries: {cart_entries}")
         
         if not cart_entries:
             print("No cart entries found for this user.")
@@ -284,7 +286,6 @@ def cart():
             cart_count = get_cart_count()
             return render_template('cart.html', cart_items=[], total=0, cart_count=cart_count, form=form, is_cart_empty=True)
 
-        # Step 2: Join with products table
         c.execute('''
             SELECT p.id, p.name, p.price, p.category, c.quantity, p.stock, p.image
             FROM cart c
@@ -292,9 +293,8 @@ def cart():
             WHERE c.user_id = ?
         ''', (session['user_id'],))
         cart_items = c.fetchall()
-        print(f"Cart items after join: {cart_items}")  # Debug
+        print(f"Cart items after join: {cart_items}")
         
-        # Step 3: Compute total and render
         total = sum(item['price'] * item['quantity'] for item in cart_items)
         conn.close()
         cart_count = get_cart_count()
@@ -326,7 +326,7 @@ def buy(product_id):
             return jsonify({'success': False, 'message': 'Product not found'}), 404
         if product['stock'] < quantity:
             return jsonify({'success': False, 'message': f'Not enough stock for {product["name"]}'}), 400
-        print(f"Adding to cart for user_id: {session['user_id']}")  # Debug
+        print(f"Adding to cart for user_id: {session['user_id']}")
         c.execute('SELECT quantity FROM cart WHERE user_id = ? AND product_id = ?',
                   (session['user_id'], product_id))
         cart_item = c.fetchone()
@@ -340,7 +340,6 @@ def buy(product_id):
         c.execute('INSERT INTO interactions (user_id, product_id, action, timestamp) VALUES (?, ?, ?, ?)',
                   (session['user_id'], product_id, 'view', datetime.now().isoformat()))
         conn.commit()
-        # Debug: Check cart contents
         c.execute('SELECT * FROM cart WHERE user_id = ?', (session['user_id'],))
         cart_contents = c.fetchall()
         print(f"Cart contents after adding: {cart_contents}")
@@ -364,7 +363,6 @@ def checkout():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Please login'}), 401
     
-    # Debug: Log incoming request
     print(f"Checkout request received for user_id: {session['user_id']}")
     print(f"Form data: {request.form}")
     
@@ -374,14 +372,12 @@ def checkout():
             return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         c = conn.cursor()
         
-        # Verify user exists
         c.execute('SELECT id FROM users WHERE id = ?', (session['user_id'],))
         if not c.fetchone():
             session.clear()
             conn.close()
             return jsonify({'success': False, 'message': 'User not found'}), 401
         
-        # Fetch cart items with stock information
         c.execute('''
             SELECT c.id, p.id as product_id, p.name, p.price, c.quantity, p.stock
             FROM cart c
@@ -390,38 +386,33 @@ def checkout():
         ''', (session['user_id'],))
         cart_items = c.fetchall()
         
-        print(f"Cart items: {[(item['name'], item['quantity'], item['stock']) for item in cart_items]}")  # Debug
+        print(f"Cart items: {[(item['name'], item['quantity'], item['stock']) for item in cart_items]}")
         
         if not cart_items:
             conn.close()
             return jsonify({'success': False, 'message': 'Your cart is empty'}), 400
         
-        # Validate stock
         for item in cart_items:
             if item['stock'] < item['quantity']:
                 conn.close()
                 return jsonify({'success': False, 'message': f'Not enough stock for {item["name"]}'}), 400
         
-        # Calculate total price
         total_price = sum(item['price'] * item['quantity'] for item in cart_items)
         timestamp = datetime.now().isoformat()
         
-        # Insert order
         c.execute('INSERT INTO orders (user_id, total_price, status, timestamp) VALUES (?, ?, ?, ?)',
                   (session['user_id'], total_price, 'pending', timestamp))
         order_id = c.lastrowid
         
-        # Insert order items and update stock
         for item in cart_items:
             c.execute('INSERT INTO order_items (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)',
                       (order_id, item['product_id'], item['quantity'], item['price']))
             c.execute('UPDATE products SET stock = stock - ? WHERE id = ?', (item['quantity'], item['product_id']))
         
-        # Clear cart
         c.execute('DELETE FROM cart WHERE user_id = ?', (session['user_id'],))
         
         conn.commit()
-        print(f"Order created successfully: order_id={order_id}, total_price={total_price}")  # Debug
+        print(f"Order created successfully: order_id={order_id}, total_price={total_price}")
         conn.close()
         return jsonify({
             'success': True,
@@ -441,7 +432,6 @@ def checkout():
             conn.close()
         return jsonify({'success': False, 'message': 'Unexpected error during checkout'}), 500
 
-
 @app.route('/order_confirmation/<int:order_id>')
 def order_confirmation(order_id):
     if 'user_id' not in session:
@@ -456,13 +446,11 @@ def order_confirmation(order_id):
             session.clear()
             conn.close()
             return redirect(url_for('login'))
-        # Fetch the order
         c.execute('SELECT * FROM orders WHERE id = ? AND user_id = ?', (order_id, session['user_id']))
         order = c.fetchone()
         if not order:
             conn.close()
             return render_template('error.html', error='Order not found', cart_count=get_cart_count()), 404
-        # Fetch order items
         c.execute('''
             SELECT oi.quantity, oi.price, p.name, p.image
             FROM order_items oi
@@ -479,18 +467,16 @@ def order_confirmation(order_id):
             conn.close()
         return render_template('error.html', error='Failed to load order confirmation', cart_count=0), 500
 
-
 @app.route('/payment', methods=['GET', 'POST'])
 def payment():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
-    # Get order_id from query parameter
     order_id = request.args.get('order_id', type=int)
     if not order_id:
         return render_template('error.html', error='Order ID is required', cart_count=get_cart_count()), 400
     
-    form = PaymentForm()  # Create form instance
+    form = PaymentForm()
     
     try:
         conn = get_db_connection()
@@ -498,14 +484,12 @@ def payment():
             return render_template('error.html', error='Database connection failed', cart_count=0), 500
         c = conn.cursor()
         
-        # Fetch the order
         c.execute('SELECT * FROM orders WHERE id = ? AND user_id = ?', (order_id, session['user_id']))
         order = c.fetchone()
         if not order:
             conn.close()
             return render_template('error.html', error='Order not found', cart_count=get_cart_count()), 404
         
-        # Fetch order items (for display on payment page)
         c.execute('''
             SELECT oi.quantity, oi.price, p.name, p.image
             FROM order_items oi
@@ -515,12 +499,9 @@ def payment():
         order_items = c.fetchall()
         
         if request.method == 'POST' and form.validate_on_submit():
-            crypto = form.crypto.data  # Get crypto from form
+            crypto = form.crypto.data
             try:
-                # Debug: Print the API key to verify it's loaded
                 print(f"NOWPayments API Key: {os.getenv('NOWPAYMENTS_API_KEY')}")
-                
-                # Initiate payment with NOWPayments
                 total = order['total_price']
                 payment_id = str(uuid.uuid4())
                 response = requests.post(
@@ -537,7 +518,6 @@ def payment():
                 ).json()
                 
                 if 'pay_address' in response:
-                    # Update order with payment_id
                     c.execute('UPDATE orders SET payment_id = ? WHERE id = ?', (payment_id, order_id))
                     conn.commit()
                     conn.close()
@@ -583,6 +563,7 @@ def payment_status(payment_id):
         return jsonify({'status': 'error'}), 500
 
 @app.route('/api/recommendations')
+@cache.memoize(3600)
 def recommendations():
     if 'user_id' not in session:
         return jsonify({'error': 'Please login'}), 401
@@ -591,41 +572,118 @@ def recommendations():
         if conn is None:
             return jsonify({'error': 'Database connection failed'}), 500
         c = conn.cursor()
+        
         c.execute('SELECT COUNT(DISTINCT user_id) FROM interactions')
         num_users = c.fetchone()[0] or 1
         c.execute('SELECT COUNT(DISTINCT product_id) FROM interactions')
         num_items = c.fetchone()[0] or 1
-        model = build_ncf_model(num_users, num_items)  # No +1
+        
+        model = build_ncf_model(num_users, num_items)
+        model_path = os.path.join(os.path.dirname(__file__), 'model.pth')
+        
         try:
-            model.load_state_dict(torch.load('model.pth', map_location=torch.device('cpu'), weights_only=True))
+            model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'), weights_only=True))
             model.eval()
-        except:
-            return jsonify([])  # Model not trained
+        except Exception as e:
+            print(f"Model loading error: {e}")
+            c.execute('''
+                SELECT p.id, p.name, p.price, p.category, p.image
+                FROM products p
+                JOIN interactions i ON p.id = i.product_id
+                WHERE p.stock > 0
+                GROUP BY p.id
+                ORDER BY COUNT(i.product_id) DESC
+                LIMIT 5
+            ''')
+            products = c.fetchall()
+            conn.close()
+            return jsonify([{
+                'id': p['id'],
+                'name': p['name'],
+                'price': p['price'],
+                'category': p['category'],
+                'image': p['image'] or ''
+            } for p in products])
+
         c.execute('SELECT id FROM products WHERE stock > 0')
         product_ids = [row['id'] for row in c.fetchall()]
+        
         user_id = session['user_id']
-        # Adjust for 0-indexing
         user_id_adjusted = user_id - 1
+        
+        if user_id_adjusted >= num_users:
+            print(f"User ID {user_id} not in model, using fallback")
+            c.execute('''
+                SELECT p.id, p.name, p.price, p.category, p.image
+                FROM products p
+                JOIN interactions i ON p.id = i.product_id
+                WHERE p.stock > 0
+                GROUP BY p.id
+                ORDER BY COUNT(i.product_id) DESC
+                LIMIT 5
+            ''')
+            products = c.fetchall()
+            conn.close()
+            return jsonify([{
+                'id': p['id'],
+                'name': p['name'],
+                'price': p['price'],
+                'category': p['category'],
+                'image': p['image'] or ''
+            } for p in products])
+
         product_ids_adjusted = [pid - 1 for pid in product_ids]
         user_ids = torch.tensor([user_id_adjusted] * len(product_ids_adjusted), dtype=torch.long)
         product_ids_tensor = torch.tensor(product_ids_adjusted, dtype=torch.long)
+        
         with torch.no_grad():
             predictions = model(user_ids, product_ids_tensor).numpy().flatten()
+        
         top_ids = sorted(zip(predictions, product_ids_adjusted), reverse=True)[:5]
         top_ids = [pid for _, pid in top_ids]
-        # Convert back to 1-indexed product IDs
         top_ids = [pid + 1 for pid in top_ids]
-        c.execute('SELECT id, name, price, category, image FROM products WHERE id IN ({})'.format(','.join('?' * len(top_ids))), top_ids)
+        
+        c.execute('SELECT id, name, price, category, image FROM products WHERE id IN ({}) AND stock > 0'.format(','.join('?' * len(top_ids))), top_ids)
         products = c.fetchall()
+        
+        if not products:
+            print("No valid recommendations, using fallback")
+            c.execute('''
+                SELECT p.id, p.name, p.price, p.category, p.image
+                FROM products p
+                JOIN interactions i ON p.id = i.product_id
+                WHERE p.stock > 0
+                GROUP BY p.id
+                ORDER BY COUNT(i.product_id) DESC
+                LIMIT 5
+            ''')
+            products = c.fetchall()
+        
         conn.close()
-        return jsonify([{'id': p['id'], 'name': p['name'], 'price': p['price'], 'category': p['category'], 'image': p['image'] or ''} for p in products])
+        return jsonify([{
+            'id': p['id'],
+            'name': p['name'],
+            'price': p['price'],
+            'category': p['category'],
+            'image': p['image'] or ''
+        } for p in products])
+    
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Recommendations error: {e}")
-        return jsonify({'error': 'Failed to load recommendations'}), 500
+        c.execute('SELECT id, name, price, category, image FROM products WHERE stock > 0 ORDER BY RANDOM() LIMIT 5')
+        products = c.fetchall()
+        conn.close()
+        return jsonify([{
+            'id': p['id'],
+            'name': p['name'],
+            'price': p['price'],
+            'category': p['category'],
+            'image': p['image'] or ''
+        } for p in products])
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    form = RegisterForm()  # Instantiate the form
+    form = RegisterForm()
     if request.method == 'POST' and form.validate_on_submit():
         username = form.username.data
         password = form.password.data
@@ -639,6 +697,14 @@ def register():
             try:
                 c.execute('INSERT INTO users (username, password, preferences) VALUES (?, ?, ?)',
                           (username, hashed_password, preferences))
+                user_id = c.lastrowid
+                c.execute('SELECT id FROM products WHERE stock > 0 ORDER BY RANDOM() LIMIT 2')
+                product_ids = [row['id'] for row in c.fetchall()]
+                interactions = [
+                    (user_id, pid, 'view', datetime.now().isoformat())
+                    for pid in product_ids
+                ]
+                c.executemany('INSERT INTO interactions (user_id, product_id, action, timestamp) VALUES (?, ?, ?, ?)', interactions)
                 conn.commit()
                 return redirect(url_for('login'))
             except (psycopg2.IntegrityError, sqlite3.IntegrityError):
@@ -669,7 +735,7 @@ def login():
             if user and check_password_hash(user['password'], password):
                 session['user_id'] = user['id']
                 session.permanent = True
-                print(f"User logged in with user_id: {session['user_id']}")  # Debug
+                print(f"User logged in with user_id: {session['user_id']}")
                 return redirect(url_for('home'))
             return render_template('login.html', form=form, error='Invalid credentials', cart_count=0)
         except (psycopg2.Error, sqlite3.Error) as e:
