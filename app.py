@@ -16,7 +16,7 @@ from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm
 from pathlib import Path
 import webbrowser  # To open browser
 import sys
-inport shutil
+import shutil
 import signal  # For graceful shutdown
 
 # Handle PyInstaller runtime paths
