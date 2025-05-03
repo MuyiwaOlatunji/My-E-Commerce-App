@@ -15,6 +15,7 @@ def get_db_connection():
         return None
 
 def init_db():
+    conn = None  # Initialize conn to None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -45,7 +46,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                total_price REAL,  -- Added total_price column
+                total_price REAL,
                 timestamp TEXT,
                 status TEXT,
                 payment_id TEXT,
@@ -86,7 +87,7 @@ def init_db():
                 FOREIGN KEY (product_id) REFERENCES products(id)
             )
         ''')
-        
+               
         sample_products = [
             ('Wireless Mouse', 29.99, 'Electronics', 100, '/static/images/wireless_mouse.jpg'),
             ('Graphic T-shirt', 15.99, 'Clothing', 200, '/static/images/graphic_t-shirt.jpg'),
@@ -125,6 +126,7 @@ def init_db():
             ('Humidifier', 39.99, 'Home Appliances', 45, '/static/images/humidifier.jpg'),
         ]
         
+         
         c.execute('SELECT COUNT(*) FROM products')
         if c.fetchone()[0] == 0:
             c.executemany('INSERT INTO products (name, price, category, stock, image) VALUES (?, ?, ?, ?, ?)', sample_products)
@@ -133,4 +135,5 @@ def init_db():
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Database initialization error: {e}")
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
