@@ -189,7 +189,7 @@ def init_db():
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Database initialization error: {e}")
     finally:
-        if conn:
+        if conn is not None:
             conn.close()
 
 # Cart Count Helper
@@ -392,7 +392,7 @@ def buy(product_id):
         print(f"Buy error: {e}")
         return jsonify({'success': False, 'message': 'Failed to add to cart'}), 500
     finally:
-        if conn:
+        if conn is not None:
             conn.close()
 
 @app.route('/checkout', methods=['POST'])
@@ -784,7 +784,7 @@ def register():
                 print(f"Register error: {e}")
                 return render_template('register.html', form=form, error='Registration failed', cart_count=0)
             finally:
-                if conn:
+                if conn is not None:
                     conn.close()
         else:
             print("Form validation failed")
