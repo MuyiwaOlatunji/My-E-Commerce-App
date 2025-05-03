@@ -16,6 +16,7 @@ from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm
 from pathlib import Path
 import webbrowser  # To open browser
 import sys
+inport shutil
 import signal  # For graceful shutdown
 
 # Handle PyInstaller runtime paths
@@ -841,6 +842,6 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, shutdown_server)
     signal.signal(signal.SIGTERM, shutdown_server)
     # Open browser
-    webbrowser.open('http://localhost:5000')
+    port = int(os.getenv('Port', 10000))
     # Run Flask app
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    app.run(debug=True, host='0.0.0.0', port=port, use_reloader=False)
