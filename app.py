@@ -53,20 +53,31 @@ def get_db_connection():
     try:
         # Use the persistent disk mounted at /app/data
         app_data_dir = '/app/data'
+        print(f"Attempting to create directory: {app_data_dir}")
         os.makedirs(app_data_dir, exist_ok=True)
         db_path = os.path.join(app_data_dir, 'ecommerce.db')
+        print(f"Database path: {db_path}")
         
         # If the database doesn't exist, copy a pre-populated one (if available)
         if not os.path.exists(db_path):
             source_db = os.path.join(BASE_DIR, 'ecommerce.db')
+            print(f"Checking for pre-populated database at: {source_db}")
             if os.path.exists(source_db):
+                print(f"Copying pre-populated database from {source_db} to {db_path}")
                 shutil.copy(source_db, db_path)
+            else:
+                print(f"No pre-populated database found at {source_db}")
         
+        print(f"Connecting to database at: {db_path}")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        print("Database connection successful")
         return conn
     except sqlite3.Error as e:
         print(f"Database connection error: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error in get_db_connection: {e}")
         return None
 
 # Initialize Database
@@ -242,6 +253,7 @@ def build_ncf_model(num_users, num_items, embedding_dim=32):
 def home():
     if 'user_id' not in session:
         return redirect(url_for('login'))
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -281,12 +293,16 @@ def home():
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Home error: {e}")
         return render_template('error.html', error='Failed to load products', cart_count=0)
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route('/search')
 def search():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     query = request.args.get('q', '')
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -300,6 +316,9 @@ def search():
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Search error: {e}")
         return render_template('error.html', error='Search failed', cart_count=0)
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route('/cart')
 def cart():
@@ -307,6 +326,7 @@ def cart():
         return redirect(url_for('login'))
     print(f"Fetching cart for user_id: {session['user_id']}")
     form = CheckoutForm()
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -339,11 +359,12 @@ def cart():
     
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Cart error: {e}")
-        if conn:
-            conn.close()
         cart_count = get_cart_count()
         return render_template('cart.html', cart_items=[], error=f'Failed to load cart: {str(e)}', cart_count=cart_count, form=form, is_cart_empty=True)
-
+    finally:
+        if conn is not None:
+            conn.close()
+            
 @app.route('/buy/<int:product_id>', methods=['POST'])
 @csrf.exempt
 def buy(product_id):
@@ -352,6 +373,7 @@ def buy(product_id):
     quantity = int(request.form.get('quantity', 1))
     if quantity < 1:
         return jsonify({'success': False, 'message': 'Invalid quantity'}), 400
+    conn = None 
     try:
         conn = get_db_connection()
         if conn is None:
@@ -402,7 +424,8 @@ def checkout():
     
     print(f"Checkout request received for user_id: {session['user_id']}")
     print(f"Form data: {request.form}")
-    
+
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -461,18 +484,21 @@ def checkout():
         print(f"Checkout error: {e}")
         if conn:
             conn.rollback()
-            conn.close()
         return jsonify({'success': False, 'message': f'Failed to process checkout: {str(e)}'}), 500
     except Exception as e:
         print(f"Unexpected checkout error: {e}")
         if conn:
             conn.close()
         return jsonify({'success': False, 'message': 'Unexpected error during checkout'}), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route('/order_confirmation/<int:order_id>')
 def order_confirmation(order_id):
     if 'user_id' not in session:
         return redirect(url_for('login'))
+    conn = None 
     try:
         conn = get_db_connection()
         if conn is None:
@@ -500,9 +526,10 @@ def order_confirmation(order_id):
         return render_template('order_confirmation.html', order=order, order_items=order_items, cart_count=cart_count)
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Order confirmation error: {e}")
-        if conn:
-            conn.close()
         return render_template('error.html', error='Failed to load order confirmation', cart_count=0), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route('/payment', methods=['GET', 'POST'])
 def payment():
@@ -514,7 +541,7 @@ def payment():
         return render_template('error.html', error='Order ID is required', cart_count=get_cart_count()), 400
     
     form = PaymentForm()
-    
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -572,14 +599,16 @@ def payment():
     
     except (psycopg2.Error, sqlite3.Error) as e:
         print(f"Payment error: {e}")
-        if conn:
-            conn.close()
         return render_template('error.html', error='Failed to load payment page', cart_count=get_cart_count()), 500
-
+    finally:
+        if conn is not None:
+            conn.close()
+            
 @app.route('/payment/status/<payment_id>')
 def payment_status(payment_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Please login'}), 401
+    conn = None
     try:
         response = requests.get(
             f'https://api.nowpayments.io/v1/payment/{payment_id}',
@@ -604,6 +633,7 @@ def payment_status(payment_id):
 def recommendations():
     if 'user_id' not in session:
         return jsonify({'error': 'Please login'}), 401
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -739,6 +769,28 @@ def recommendations():
             'category': p['category'],
             'image': p['image'] or ''
         } for p in products])
+    finally:
+        if conn is not None:
+            conn.close()
+
+def get_cart_count():
+    if 'user_id' not in session:
+        return 0
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return 0
+        c = conn.cursor()
+        c.execute('SELECT SUM(quantity) FROM cart WHERE user_id = ?', (session['user_id'],))
+        count = c.fetchone()[0]
+        conn.close()
+        return count or 0
+    except (psycopg2.Error, sqlite3.Error):
+        return 0
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
