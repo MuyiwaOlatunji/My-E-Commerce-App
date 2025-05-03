@@ -13,10 +13,23 @@ import requests
 from dotenv import load_dotenv
 import uuid
 from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm
+from pathlib import Path
+import webbrowser  # To open browser
+import sys
+import signal  # For graceful shutdown
 
-load_dotenv()
+# Handle PyInstaller runtime paths
+if getattr(sys, 'frozen', False):
+    # If running as a PyInstaller executable
+    BASE_DIR = os.path.dirname(sys.executable)
+    os.chdir(BASE_DIR)  # Change working directory to executable location
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-app = Flask(__name__)
+# Load environment variables
+load_dotenv(os.path.join(BASE_DIR, '.env'))
+
+app = Flask(__name__, static_folder=os.path.join(BASE_DIR, 'static'), template_folder=os.path.join(BASE_DIR, 'templates'))
 app.secret_key = os.environ.get('SECRET_KEY', '5507e4842f2c53c15f4a3bbd1e004e6ef59eb7007920c29d1c2b1bc133d90336')
 if not app.secret_key:
     raise ValueError("No SECRET_KEY set.")
@@ -26,10 +39,21 @@ csrf = CSRFProtect(app)
 app.config['CACHE_TYPE'] = 'SimpleCache'
 cache = Cache(app)
 
+# Global error handler to catch unhandled exceptions
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print(f"Unhandled exception: {str(e)}")
+    import traceback
+    traceback.print_exc()  # Print the full traceback to the terminal
+    return render_template('error.html', error='An unexpected error occurred: ' + str(e), cart_count=get_cart_count()), 500
+
 # Database Connection
 def get_db_connection():
     try:
-        conn = sqlite3.connect('ecommerce.db')
+        app_data_dir = os.path.join(os.getenv('APPDATA'), 'EcommerceApp')
+        os.makedirs(app_data_dir, exist_ok=True)
+        db_path = os.path.join(app_data_dir, 'ecommerce.db')
+        conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
@@ -177,22 +201,26 @@ def get_cart_count():
 
 # PyTorch NCF Recommendation Model
 class NCFModel(nn.Module):
-    def __init__(self, num_users, num_items, embedding_dim=32):
+    def __init__(self, num_users, num_items, embedding_dim=64):  # Increase embedding_dim
         super(NCFModel, self).__init__()
-        self.user_emb = nn.Embedding(num_users, embedding_dim)
-        self.item_emb = nn.Embedding(num_items, embedding_dim)
-        self.fc1 = nn.Linear(embedding_dim * 2, 64)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(64, 1)
+        self.user_embedding = nn.Embedding(num_users, embedding_dim)
+        self.item_embedding = nn.Embedding(num_items, embedding_dim)
+        self.fc_layers = nn.Sequential(
+            nn.Linear(embedding_dim * 2, 128),  # Increase layer size
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
         self.sigmoid = nn.Sigmoid()
-        
+    
     def forward(self, user_ids, item_ids):
-        user_emb = self.user_emb(user_ids)
-        item_emb = self.item_emb(item_ids)
+        user_emb = self.user_embedding(user_ids)
+        item_emb = self.item_embedding(item_ids)
         concat = torch.cat([user_emb, item_emb], dim=-1)
-        x = self.fc1(concat)
-        x = self.relu(x)
-        x = self.fc2(x)
+        x = self.fc_layers(concat)
         x = self.sigmoid(x)
         return x
 
@@ -573,17 +601,24 @@ def recommendations():
             return jsonify({'error': 'Database connection failed'}), 500
         c = conn.cursor()
         
+        # Get user preferences
+        c.execute('SELECT preferences FROM users WHERE id = ?', (session['user_id'],))
+        user = c.fetchone()
+        user_preference = user['preferences'] if user and user['preferences'] else None
+        print(f"User ID: {session['user_id']}, Preference: {user_preference}")
+        
         c.execute('SELECT COUNT(DISTINCT user_id) FROM interactions')
         num_users = c.fetchone()[0] or 1
-        c.execute('SELECT COUNT(DISTINCT product_id) FROM interactions')
+        c.execute('SELECT COUNT(*) FROM products')
         num_items = c.fetchone()[0] or 1
         
-        model = build_ncf_model(num_users, num_items)
-        model_path = os.path.join(os.path.dirname(__file__), 'model.pth')
+        model = build_ncf_model(num_users, num_items, embedding_dim=64)  # Match embedding_dim
+        model_path = os.path.join(BASE_DIR, 'model.pth')
         
         try:
             model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'), weights_only=True))
             model.eval()
+            print("Model loaded successfully.")
         except Exception as e:
             print(f"Model loading error: {e}")
             c.execute('''
@@ -605,8 +640,10 @@ def recommendations():
                 'image': p['image'] or ''
             } for p in products])
 
-        c.execute('SELECT id FROM products WHERE stock > 0')
-        product_ids = [row['id'] for row in c.fetchall()]
+        c.execute('SELECT id, category FROM products WHERE stock > 0')
+        product_info = c.fetchall()
+        product_ids = [row['id'] for row in product_info]
+        product_categories = {row['id']: row['category'] for row in product_info}
         
         user_id = session['user_id']
         user_id_adjusted = user_id - 1
@@ -639,7 +676,20 @@ def recommendations():
         with torch.no_grad():
             predictions = model(user_ids, product_ids_tensor).numpy().flatten()
         
-        top_ids = sorted(zip(predictions, product_ids_adjusted), reverse=True)[:5]
+        # Adjust scores based on preferences
+        adjusted_scores = []
+        for pred_score, pid_adjusted in zip(predictions, product_ids_adjusted):
+            pid = pid_adjusted + 1
+            category = product_categories.get(pid, '')
+            # Boost score if the product's category matches the user's preference
+            if user_preference and user_preference.lower() == category.lower():
+                adjusted_score = pred_score + 0.2  # Boost by 0.2
+            else:
+                adjusted_score = pred_score
+            adjusted_scores.append((adjusted_score, pid_adjusted))
+        
+        # Sort by adjusted scores
+        top_ids = sorted(adjusted_scores, reverse=True)[:5]
         top_ids = [pid for _, pid in top_ids]
         top_ids = [pid + 1 for pid in top_ids]
         
@@ -684,64 +734,84 @@ def recommendations():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     form = RegisterForm()
-    if request.method == 'POST' and form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        preferences = form.preferences.data
-        hashed_password = generate_password_hash(password)
-        try:
-            conn = get_db_connection()
-            if conn is None:
-                return render_template('register.html', form=form, error='Database connection failed', cart_count=0)
-            c = conn.cursor()
+    print(f"Received request: method={request.method}, form data={form.data}")
+    if request.method == 'POST':
+        print("POST request received")
+        if form.validate_on_submit():
+            print("Form validation successful")
+            username = form.username.data
+            password = form.password.data
+            preferences = form.preferences.data
+            hashed_password = generate_password_hash(password)
+            print(f"Registering user: username={username}, preferences={preferences}")
             try:
-                c.execute('INSERT INTO users (username, password, preferences) VALUES (?, ?, ?)',
-                          (username, hashed_password, preferences))
-                user_id = c.lastrowid
-                c.execute('SELECT id FROM products WHERE stock > 0 ORDER BY RANDOM() LIMIT 2')
-                product_ids = [row['id'] for row in c.fetchall()]
-                interactions = [
-                    (user_id, pid, 'view', datetime.now().isoformat())
-                    for pid in product_ids
-                ]
-                c.executemany('INSERT INTO interactions (user_id, product_id, action, timestamp) VALUES (?, ?, ?, ?)', interactions)
-                conn.commit()
-                return redirect(url_for('login'))
-            except (psycopg2.IntegrityError, sqlite3.IntegrityError):
-                conn.rollback()
-                return render_template('register.html', form=form, error='Username already exists', cart_count=0)
-        except (psycopg2.Error, sqlite3.Error) as e:
-            print(f"Register error: {e}")
-            return render_template('register.html', form=form, error='Registration failed', cart_count=0)
-        finally:
-            if conn:
-                conn.close()
+                conn = get_db_connection()
+                if conn is None:
+                    print("Database connection failed")
+                    return render_template('register.html', form=form, error='Database connection failed', cart_count=0)
+                c = conn.cursor()
+                try:
+                    c.execute('INSERT INTO users (username, password, preferences) VALUES (?, ?, ?)',
+                              (username, hashed_password, preferences))
+                    user_id = c.lastrowid
+                    print(f"User inserted with ID: {user_id}")
+                    c.execute('SELECT id FROM products WHERE stock > 0 ORDER BY RANDOM() LIMIT 2')
+                    product_ids = [row['id'] for row in c.fetchall()]
+                    print(f"Selected product IDs for interactions: {product_ids}")
+                    interactions = [
+                        (user_id, pid, 'view', datetime.now().isoformat())
+                        for pid in product_ids
+                    ]
+                    c.executemany('INSERT INTO interactions (user_id, product_id, action, timestamp) VALUES (?, ?, ?, ?)', interactions)
+                    print(f"Inserted {len(interactions)} interactions for user ID {user_id}")
+                    conn.commit()
+                    print("Transaction committed successfully")
+                    return redirect(url_for('login'))
+                except (psycopg2.IntegrityError, sqlite3.IntegrityError) as e:
+                    conn.rollback()
+                    print(f"IntegrityError: {e}")
+                    return render_template('register.html', form=form, error='Username already exists', cart_count=0)
+            except (psycopg2.Error, sqlite3.Error) as e:
+                print(f"Register error: {e}")
+                return render_template('register.html', form=form, error='Registration failed', cart_count=0)
+            finally:
+                if conn:
+                    conn.close()
+        else:
+            print("Form validation failed")
+            print(f"Form errors: {form.errors}")
     return render_template('register.html', form=form, cart_count=0)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    form = LoginForm()
-    if request.method == 'POST' and form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        try:
-            conn = get_db_connection()
-            if conn is None:
-                return render_template('login.html', form=form, error='Database connection failed', cart_count=0)
-            c = conn.cursor()
-            c.execute('SELECT * FROM users WHERE username = ?', (username,))
-            user = c.fetchone()
-            conn.close()
-            if user and check_password_hash(user['password'], password):
-                session['user_id'] = user['id']
-                session.permanent = True
-                print(f"User logged in with user_id: {session['user_id']}")
-                return redirect(url_for('home'))
-            return render_template('login.html', form=form, error='Invalid credentials', cart_count=0)
-        except (psycopg2.Error, sqlite3.Error) as e:
-            print(f"Login error: {e}")
-            return render_template('login.html', form=form, error='Login failed', cart_count=0)
-    return render_template('login.html', form=form, cart_count=0)
+    try:
+        print("Initializing LoginForm...")
+        form = LoginForm()
+        print("LoginForm initialized successfully")
+        if request.method == 'POST' and form.validate_on_submit():
+            username = form.username.data
+            password = form.password.data
+            try:
+                conn = get_db_connection()
+                if conn is None:
+                    return render_template('login.html', form=form, error='Database connection failed', cart_count=0)
+                c = conn.cursor()
+                c.execute('SELECT * FROM users WHERE username = ?', (username,))
+                user = c.fetchone()
+                conn.close()
+                if user and check_password_hash(user['password'], password):
+                    session['user_id'] = user['id']
+                    session.permanent = True
+                    print(f"User logged in with user_id: {session['user_id']}")
+                    return redirect(url_for('home'))
+                return render_template('login.html', form=form, error='Invalid credentials', cart_count=0)
+            except (psycopg2.Error, sqlite3.Error) as e:
+                print(f"Login error: {e}")
+                return render_template('login.html', form=form, error='Login failed', cart_count=0)
+        return render_template('login.html', form=form, cart_count=0)
+    except Exception as e:
+        print(f"Error in /login route: {e}")
+        raise e  # Re-raise the exception to get the full traceback
 
 @app.route('/logout')
 def logout():
@@ -752,6 +822,17 @@ def logout():
 def error():
     return render_template('error.html', error='An unexpected error occurred', cart_count=get_cart_count())
 
+# Graceful shutdown handler
+def shutdown_server(signum, frame):
+    print("Shutting down server...")
+    sys.exit(0)
+
 if __name__ == '__main__':
     init_db()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Register shutdown handler
+    signal.signal(signal.SIGINT, shutdown_server)
+    signal.signal(signal.SIGTERM, shutdown_server)
+    # Open browser
+    webbrowser.open('http://localhost:5000')
+    # Run Flask app
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)

@@ -1,9 +1,14 @@
 import sqlite3
 import psycopg2
+import os
 
 def get_db_connection():
     try:
-        conn = sqlite3.connect('ecommerce.db')
+        app_data_dir = os.path.join(os.getenv('APPDATA'), 'EcommerceApp')
+        os.makedirs(app_data_dir, exist_ok=True)
+        db_path = os.path.join(app_data_dir, 'ecommerce.db')
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
         print(f"Database connection error: {e}")
