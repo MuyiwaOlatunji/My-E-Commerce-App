@@ -50,9 +50,17 @@ def handle_exception(e):
 # Database Connection
 def get_db_connection():
     try:
-        app_data_dir = os.path.join(os.getenv('APPDATA'), 'EcommerceApp')
+        # Use the persistent disk mounted at /app/data
+        app_data_dir = '/app/data'
         os.makedirs(app_data_dir, exist_ok=True)
         db_path = os.path.join(app_data_dir, 'ecommerce.db')
+        
+        # If the database doesn't exist, copy a pre-populated one (if available)
+        if not os.path.exists(db_path):
+            source_db = os.path.join(BASE_DIR, 'ecommerce.db')
+            if os.path.exists(source_db):
+                shutil.copy(source_db, db_path)
+        
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
