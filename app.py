@@ -1,6 +1,5 @@
 import os
 import sqlite3
-import psycopg2
 from flask import Flask, session, render_template, request, redirect, url_for, jsonify, make_response
 from flask_wtf.csrf import CSRFProtect
 from flask_caching import Cache
@@ -13,11 +12,8 @@ import requests
 from dotenv import load_dotenv
 import uuid
 from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm
-from pathlib import Path
-import webbrowser
-import sys
-import shutil
 import signal
+import sys
 
 # Handle PyInstaller runtime paths
 if getattr(sys, 'frozen', False):
@@ -50,16 +46,7 @@ def handle_exception(e):
 # Database Connection
 def get_db_connection():
     try:
-        # Use environment variable for database path, default to project root for local development
         db_path = os.environ.get('DATABASE_PATH', os.path.join(BASE_DIR, 'ecommerce.db'))
-        
-        # Ensure the directory exists (only for non-root paths)
-        db_dir = os.path.dirname(db_path)
-        if db_dir and not os.path.exists(db_dir):
-            print(f"Creating directory: {db_dir}")
-            os.makedirs(db_dir, exist_ok=True)
-        
-        # Log database path
         print(f"Connecting to database at: {db_path}")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -68,12 +55,10 @@ def get_db_connection():
     except sqlite3.Error as e:
         print(f"Database connection error: {e}")
         return None
-    except Exception as e:
-        print(f"Unexpected error in get_db_connection: {e}")
-        return None
 
 # Initialize Database
 def init_db():
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -189,7 +174,7 @@ def init_db():
             c.executemany('INSERT INTO products (name, price, category, stock, image) VALUES (?, ?, ?, ?, ?)', sample_products)
         
         conn.commit()
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Database initialization error: {e}")
     finally:
         if conn is not None:
@@ -207,42 +192,36 @@ def get_cart_count():
         c = conn.cursor()
         c.execute('SELECT SUM(quantity) FROM cart WHERE user_id = ?', (session['user_id'],))
         count = c.fetchone()[0]
-        conn.close()
         return count or 0
-    except (psycopg2.Error, sqlite3.Error):
+    except sqlite3.Error:
         return 0
     finally:
         if conn is not None:
             conn.close()
 
 # PyTorch NCF Recommendation Model
-class NCFModel(nn.Module):
-    def __init__(self, num_users, num_items, embedding_dim=64):
-        super(NCFModel, self).__init__()
+class NCF(nn.Module):
+    def __init__(self, num_users, num_items, embedding_dim=64, layers=[128, 64, 32]):
+        super(NCF, self).__init__()
         self.user_embedding = nn.Embedding(num_users, embedding_dim)
         self.item_embedding = nn.Embedding(num_items, embedding_dim)
-        self.fc_layers = nn.Sequential(
-            nn.Linear(embedding_dim * 2, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
-        )
+        self.fc_layers = nn.ModuleList()
+        input_size = embedding_dim * 2
+        for layer_size in layers:
+            self.fc_layers.append(nn.Linear(input_size, layer_size))
+            input_size = layer_size
+        self.output_layer = nn.Linear(input_size, 1)
+        self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
-    
-    def forward(self, user_ids, item_ids):
-        user_emb = self.user_embedding(user_ids)
-        item_emb = self.item_embedding(item_ids)
-        concat = torch.cat([user_emb, item_emb], dim=-1)
-        x = self.fc_layers(concat)
-        x = self.sigmoid(x)
-        return x
 
-def build_ncf_model(num_users, num_items, embedding_dim=32):
-    model = NCFModel(num_users, num_items, embedding_dim)
-    return model
+    def forward(self, user_ids, item_ids):
+        user_embeds = self.user_embedding(user_ids)
+        item_embeds = self.item_embedding(item_ids)
+        x = torch.cat([user_embeds, item_embeds], dim=-1)
+        for layer in self.fc_layers:
+            x = self.relu(layer(x))
+        x = self.output_layer(x)
+        return self.sigmoid(x)
 
 # Routes
 @app.route('/')
@@ -258,12 +237,10 @@ def home():
         c.execute('SELECT id FROM users WHERE id = ?', (session['user_id'],))
         if not c.fetchone():
             session.clear()
-            conn.close()
             return redirect(url_for('login'))
         c.execute('SELECT * FROM products WHERE stock > 0')
         products = c.fetchall()
         print("Products fetched for home page:", [(p['name'], p['image']) for p in products])
-        conn.close()
         cart_count = get_cart_count()
         rec_response = recommendations()
         if isinstance(rec_response, tuple):
@@ -286,7 +263,7 @@ def home():
         response = make_response(response)
         response.headers['Cache-Control'] = 'public, max-age=60'
         return response
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Home error: {e}")
         return render_template('error.html', error='Failed to load products', cart_count=0)
     finally:
@@ -306,10 +283,9 @@ def search():
         c = conn.cursor()
         c.execute('SELECT * FROM products WHERE name LIKE ? AND stock > 0', (f'%{query}%',))
         products = c.fetchall()
-        conn.close()
         cart_count = get_cart_count()
         return render_template('home.html', products=products, cart_count=cart_count)
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Search error: {e}")
         return render_template('error.html', error='Search failed', cart_count=0)
     finally:
@@ -335,7 +311,6 @@ def cart():
         
         if not cart_entries:
             print("No cart entries found for this user.")
-            conn.close()
             cart_count = get_cart_count()
             return render_template('cart.html', cart_items=[], total=0, cart_count=cart_count, form=form, is_cart_empty=True)
 
@@ -349,18 +324,17 @@ def cart():
         print(f"Cart items after join: {cart_items}")
         
         total = sum(item['price'] * item['quantity'] for item in cart_items)
-        conn.close()
         cart_count = get_cart_count()
         return render_template('cart.html', cart_items=cart_items, total=total, cart_count=cart_count, form=form, is_cart_empty=False)
     
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Cart error: {e}")
         cart_count = get_cart_count()
         return render_template('cart.html', cart_items=[], error=f'Failed to load cart: {str(e)}', cart_count=cart_count, form=form, is_cart_empty=True)
     finally:
         if conn is not None:
             conn.close()
-            
+
 @app.route('/buy/<int:product_id>', methods=['POST'])
 @csrf.exempt
 def buy(product_id):
@@ -369,7 +343,7 @@ def buy(product_id):
     quantity = int(request.form.get('quantity', 1))
     if quantity < 1:
         return jsonify({'success': False, 'message': 'Invalid quantity'}), 400
-    conn = None 
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -404,7 +378,7 @@ def buy(product_id):
             'product_id': product_id,
             'quantity': quantity
         })
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         if conn:
             conn.rollback()
         print(f"Buy error: {e}")
@@ -417,10 +391,8 @@ def buy(product_id):
 def checkout():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Please login'}), 401
-    
     print(f"Checkout request received for user_id: {session['user_id']}")
     print(f"Form data: {request.form}")
-
     conn = None
     try:
         conn = get_db_connection()
@@ -431,7 +403,6 @@ def checkout():
         c.execute('SELECT id FROM users WHERE id = ?', (session['user_id'],))
         if not c.fetchone():
             session.clear()
-            conn.close()
             return jsonify({'success': False, 'message': 'User not found'}), 401
         
         c.execute('''
@@ -445,12 +416,10 @@ def checkout():
         print(f"Cart items: {[(item['name'], item['quantity'], item['stock']) for item in cart_items]}")
         
         if not cart_items:
-            conn.close()
             return jsonify({'success': False, 'message': 'Your cart is empty'}), 400
         
         for item in cart_items:
             if item['stock'] < item['quantity']:
-                conn.close()
                 return jsonify({'success': False, 'message': f'Not enough stock for {item["name"]}'}), 400
         
         total_price = sum(item['price'] * item['quantity'] for item in cart_items)
@@ -469,22 +438,19 @@ def checkout():
         
         conn.commit()
         print(f"Order created successfully: order_id={order_id}, total_price={total_price}")
-        conn.close()
         return jsonify({
             'success': True,
             'message': 'Checkout successful',
             'redirect': url_for('order_confirmation', order_id=order_id, _external=True)
         }), 200
     
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Checkout error: {e}")
         if conn:
             conn.rollback()
         return jsonify({'success': False, 'message': f'Failed to process checkout: {str(e)}'}), 500
     except Exception as e:
         print(f"Unexpected checkout error: {e}")
-        if conn:
-            conn.close()
         return jsonify({'success': False, 'message': 'Unexpected error during checkout'}), 500
     finally:
         if conn is not None:
@@ -494,7 +460,7 @@ def checkout():
 def order_confirmation(order_id):
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    conn = None 
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -503,12 +469,10 @@ def order_confirmation(order_id):
         c.execute('SELECT id FROM users WHERE id = ?', (session['user_id'],))
         if not c.fetchone():
             session.clear()
-            conn.close()
             return redirect(url_for('login'))
         c.execute('SELECT * FROM orders WHERE id = ? AND user_id = ?', (order_id, session['user_id']))
         order = c.fetchone()
         if not order:
-            conn.close()
             return render_template('error.html', error='Order not found', cart_count=get_cart_count()), 404
         c.execute('''
             SELECT oi.quantity, oi.price, p.name, p.image
@@ -517,10 +481,9 @@ def order_confirmation(order_id):
             WHERE oi.order_id = ?
         ''', (order_id,))
         order_items = c.fetchall()
-        conn.close()
         cart_count = get_cart_count()
         return render_template('order_confirmation.html', order=order, order_items=order_items, cart_count=cart_count)
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Order confirmation error: {e}")
         return render_template('error.html', error='Failed to load order confirmation', cart_count=0), 500
     finally:
@@ -531,11 +494,9 @@ def order_confirmation(order_id):
 def payment():
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    
     order_id = request.args.get('order_id', type=int)
     if not order_id:
         return render_template('error.html', error='Order ID is required', cart_count=get_cart_count()), 400
-    
     form = PaymentForm()
     conn = None
     try:
@@ -547,7 +508,6 @@ def payment():
         c.execute('SELECT * FROM orders WHERE id = ? AND user_id = ?', (order_id, session['user_id']))
         order = c.fetchone()
         if not order:
-            conn.close()
             return render_template('error.html', error='Order not found', cart_count=get_cart_count()), 404
         
         c.execute('''
@@ -580,26 +540,22 @@ def payment():
                 if 'pay_address' in response:
                     c.execute('UPDATE orders SET payment_id = ? WHERE id = ?', (payment_id, order_id))
                     conn.commit()
-                    conn.close()
                     return render_template('payment.html', address=response['pay_address'], crypto=crypto, payment_id=payment_id, order=order, order_items=order_items, cart_count=get_cart_count())
                 else:
-                    conn.close()
                     return render_template('error.html', error='Payment initiation failed: ' + str(response.get('message', 'Unknown error')), cart_count=get_cart_count()), 500
             except requests.RequestException as e:
                 print(f"Payment error: {e}")
-                conn.close()
                 return render_template('error.html', error='Payment processing failed', cart_count=get_cart_count()), 500
         
-        conn.close()
         return render_template('payment.html', form=form, order=order, order_items=order_items, cart_count=get_cart_count())
     
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Payment error: {e}")
         return render_template('error.html', error='Failed to load payment page', cart_count=get_cart_count()), 500
     finally:
         if conn is not None:
             conn.close()
-            
+
 @app.route('/payment/status/<payment_id>')
 def payment_status(payment_id):
     if 'user_id' not in session:
@@ -617,12 +573,14 @@ def payment_status(payment_id):
             c = conn.cursor()
             c.execute('UPDATE orders SET status = ? WHERE payment_id = ?', ('Confirmed', payment_id))
             conn.commit()
-            conn.close()
             return jsonify({'status': 'success', 'redirect': url_for('home', _external=True)})
         return jsonify({'status': 'pending'})
-    except (psycopg2.Error, sqlite3.Error, requests.RequestException) as e:
+    except (sqlite3.Error, requests.RequestException) as e:
         print(f"Payment status error: {e}")
         return jsonify({'status': 'error'}), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route('/api/recommendations')
 @cache.memoize(3600)
@@ -641,12 +599,12 @@ def recommendations():
         user_preference = user['preferences'] if user and user['preferences'] else None
         print(f"User ID: {session['user_id']}, Preference: {user_preference}")
         
-        c.execute('SELECT COUNT(DISTINCT user_id) FROM interactions')
-        num_users = c.fetchone()[0] or 1
+        c.execute('SELECT COUNT(DISTINCT id) FROM users')
+        num_users = max(c.fetchone()[0], 1)
         c.execute('SELECT COUNT(*) FROM products')
-        num_items = c.fetchone()[0] or 1
+        num_items = max(c.fetchone()[0], 1)
         
-        model = build_ncf_model(num_users, num_items, embedding_dim=64)
+        model = NCF(num_users, num_items, embedding_dim=64, layers=[128, 64, 32])
         model_path = os.path.join(BASE_DIR, 'model.pth')
         
         try:
@@ -658,14 +616,13 @@ def recommendations():
             c.execute('''
                 SELECT p.id, p.name, p.price, p.category, p.image
                 FROM products p
-                JOIN interactions i ON p.id = i.product_id
+                LEFT JOIN interactions i ON p.id = i.product_id
                 WHERE p.stock > 0
                 GROUP BY p.id
                 ORDER BY COUNT(i.product_id) DESC
                 LIMIT 5
             ''')
             products = c.fetchall()
-            conn.close()
             return jsonify([{
                 'id': p['id'],
                 'name': p['name'],
@@ -687,14 +644,13 @@ def recommendations():
             c.execute('''
                 SELECT p.id, p.name, p.price, p.category, p.image
                 FROM products p
-                JOIN interactions i ON p.id = i.product_id
+                LEFT JOIN interactions i ON p.id = i.product_id
                 WHERE p.stock > 0
                 GROUP BY p.id
                 ORDER BY COUNT(i.product_id) DESC
                 LIMIT 5
             ''')
             products = c.fetchall()
-            conn.close()
             return jsonify([{
                 'id': p['id'],
                 'name': p['name'],
@@ -732,7 +688,7 @@ def recommendations():
             c.execute('''
                 SELECT p.id, p.name, p.price, p.category, p.image
                 FROM products p
-                JOIN interactions i ON p.id = i.product_id
+                LEFT JOIN interactions i ON p.id = i.product_id
                 WHERE p.stock > 0
                 GROUP BY p.id
                 ORDER BY COUNT(i.product_id) DESC
@@ -740,7 +696,6 @@ def recommendations():
             ''')
             products = c.fetchall()
         
-        conn.close()
         return jsonify([{
             'id': p['id'],
             'name': p['name'],
@@ -749,11 +704,10 @@ def recommendations():
             'image': p['image'] or ''
         } for p in products])
     
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Recommendations error: {e}")
         c.execute('SELECT id, name, price, category, image FROM products WHERE stock > 0 ORDER BY RANDOM() LIMIT 5')
         products = c.fetchall()
-        conn.close()
         return jsonify([{
             'id': p['id'],
             'name': p['name'],
@@ -778,6 +732,7 @@ def register():
             preferences = form.preferences.data
             hashed_password = generate_password_hash(password)
             print(f"Registering user: username={username}, preferences={preferences}")
+            conn = None
             try:
                 conn = get_db_connection()
                 if conn is None:
@@ -801,11 +756,11 @@ def register():
                     conn.commit()
                     print("Transaction committed successfully")
                     return redirect(url_for('login'))
-                except (psycopg2.IntegrityError, sqlite3.IntegrityError) as e:
+                except sqlite3.IntegrityError as e:
                     conn.rollback()
                     print(f"IntegrityError: {e}")
                     return render_template('register.html', form=form, error='Username already exists', cart_count=0)
-            except (psycopg2.Error, sqlite3.Error) as e:
+            except sqlite3.Error as e:
                 print(f"Register error: {e}")
                 return render_template('register.html', form=form, error='Registration failed', cart_count=0)
             finally:
@@ -825,6 +780,7 @@ def login():
         if request.method == 'POST' and form.validate_on_submit():
             username = form.username.data
             password = form.password.data
+            conn = None
             try:
                 conn = get_db_connection()
                 if conn is None:
@@ -832,16 +788,18 @@ def login():
                 c = conn.cursor()
                 c.execute('SELECT * FROM users WHERE username = ?', (username,))
                 user = c.fetchone()
-                conn.close()
                 if user and check_password_hash(user['password'], password):
                     session['user_id'] = user['id']
                     session.permanent = True
                     print(f"User logged in with user_id: {session['user_id']}")
                     return redirect(url_for('home'))
                 return render_template('login.html', form=form, error='Invalid credentials', cart_count=0)
-            except (psycopg2.Error, sqlite3.Error) as e:
+            except sqlite3.Error as e:
                 print(f"Login error: {e}")
                 return render_template('login.html', form=form, error='Login failed', cart_count=0)
+            finally:
+                if conn is not None:
+                    conn.close()
         return render_template('login.html', form=form, cart_count=0)
     except Exception as e:
         print(f"Error in /login route: {e}")

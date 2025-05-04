@@ -1,4 +1,3 @@
-# train_ncf_model.py
 import os
 import sqlite3
 import torch
@@ -7,38 +6,36 @@ from torch.optim import Adam
 import numpy as np
 from datetime import datetime
 
-# Define the NCFModel class (same as in app.py)
-class NCFModel(nn.Module):
-    def __init__(self, num_users, num_items, embedding_dim=32):
-        super(NCFModel, self).__init__()
+# Define the NCF model (aligned with model.py)
+class NCF(nn.Module):
+    def __init__(self, num_users, num_items, embedding_dim=64, layers=[128, 64, 32]):
+        super(NCF, self).__init__()
         self.user_embedding = nn.Embedding(num_users, embedding_dim)
         self.item_embedding = nn.Embedding(num_items, embedding_dim)
-        self.fc_layers = nn.Sequential(
-            nn.Linear(embedding_dim * 2, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU()
-        )
-        self.output_layer = nn.Linear(32, 1)
+        self.fc_layers = nn.ModuleList()
+        input_size = embedding_dim * 2  # Concatenated user and item embeddings
+        for layer_size in layers:
+            self.fc_layers.append(nn.Linear(input_size, layer_size))
+            input_size = layer_size
+        self.output_layer = nn.Linear(input_size, 1)
+        self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
-        
-    def forward(self, user_ids, item_ids):
-        user_emb = self.user_embedding(user_ids)
-        item_emb = self.item_embedding(item_ids)
-        concat = torch.cat([user_emb, item_emb], dim=-1)
-        x = self.fc_layers(concat)
-        x = self.output_layer(x)
-        x = self.sigmoid(x)
-        return x
 
-# Database connection and initialization
+    def forward(self, user_ids, item_ids):
+        user_embeds = self.user_embedding(user_ids)
+        item_embeds = self.item_embedding(item_ids)
+        x = torch.cat([user_embeds, item_embeds], dim=-1)
+        for layer in self.fc_layers:
+            x = self.relu(layer(x))
+        x = self.output_layer(x)
+        return self.sigmoid(x)
+
+# Database connection
 def get_db_connection():
     try:
-        app_data_dir = os.path.join(os.getenv('APPDATA'), 'EcommerceApp')
-        os.makedirs(app_data_dir, exist_ok=True)  # Create the directory if it doesn't exist
-        db_path = os.path.join(app_data_dir, 'ecommerce.db')
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        db_path = os.environ.get('DATABASE_PATH', os.path.join(BASE_DIR, 'ecommerce.db'))
+        print(f"Connecting to database at: {db_path}")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -53,7 +50,6 @@ def init_db():
     try:
         c = conn.cursor()
         
-        # Create tables (same as in app.py)
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +116,6 @@ def init_db():
             )
         ''')
         
-        # Insert sample products if none exist
         c.execute('SELECT COUNT(*) FROM products')
         if c.fetchone()[0] == 0:
             sample_products = [
@@ -162,7 +157,6 @@ def init_db():
             ]
             c.executemany('INSERT INTO products (name, price, category, stock, image) VALUES (?, ?, ?, ?, ?)', sample_products)
         
-        # Insert sample interactions if none exist
         c.execute('SELECT COUNT(*) FROM interactions')
         if c.fetchone()[0] == 0:
             sample_interactions = [
@@ -190,10 +184,10 @@ conn.row_factory = sqlite3.Row
 c = conn.cursor()
 
 # Get the number of users and items
-c.execute('SELECT COUNT(DISTINCT user_id) FROM interactions')
-num_users = c.fetchone()[0] or 1
-c.execute('SELECT COUNT(DISTINCT product_id) FROM interactions')
-num_items = c.fetchone()[0] or 1
+c.execute('SELECT COUNT(DISTINCT id) FROM users')
+num_users = max(c.fetchone()[0], 1)  # Ensure at least 1 user
+c.execute('SELECT COUNT(DISTINCT id) FROM products')
+num_items = max(c.fetchone()[0], 1)  # Ensure at least 1 item
 print(f"Number of users: {num_users}, Number of items: {num_items}")
 
 # Load interaction data
@@ -205,8 +199,8 @@ conn.close()
 if not interactions:
     print("No interaction data found. Generating synthetic data...")
     num_samples = 1000
-    user_ids = torch.randint(0, max(num_users, 1), (num_samples,))
-    item_ids = torch.randint(0, max(num_items, 1), (num_samples,))
+    user_ids = torch.randint(0, num_users, (num_samples,))
+    item_ids = torch.randint(0, num_items, (num_samples,))
     labels = torch.randint(0, 2, (num_samples,), dtype=torch.float)
 else:
     print(f"Found {len(interactions)} interactions.")
@@ -217,7 +211,7 @@ else:
     for interaction in interactions:
         user_id = interaction['user_id'] - 1  # Adjust for 0-based indexing
         item_id = interaction['product_id'] - 1  # Adjust for 0-based indexing
-        label = 1.0 if interaction['action'] == 'view' else 0.0
+        label = 1.0 if interaction['action'] in ['view', 'buy'] else 0.0
         
         if user_id < num_users and item_id < num_items:
             user_ids_list.append(user_id)
@@ -227,8 +221,8 @@ else:
     if not user_ids_list:
         print("No valid interactions after filtering. Generating synthetic data...")
         num_samples = 1000
-        user_ids = torch.randint(0, max(num_users, 1), (num_samples,))
-        item_ids = torch.randint(0, max(num_items, 1), (num_samples,))
+        user_ids = torch.randint(0, num_users, (num_samples,))
+        item_ids = torch.randint(0, num_items, (num_samples,))
         labels = torch.randint(0, 2, (num_samples,), dtype=torch.float)
     else:
         user_ids = torch.tensor(user_ids_list, dtype=torch.long)
@@ -236,7 +230,7 @@ else:
         labels = torch.tensor(labels_list, dtype=torch.float)
 
 # Initialize the model
-model = NCFModel(num_users, num_items, embedding_dim=64)
+model = NCF(num_users, num_items, embedding_dim=64, layers=[128, 64, 32])
 optimizer = Adam(model.parameters(), lr=0.0005)
 criterion = nn.BCELoss()
 
