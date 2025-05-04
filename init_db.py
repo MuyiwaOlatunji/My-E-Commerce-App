@@ -1,21 +1,34 @@
 import sqlite3
 import psycopg2
 import os
+# Define BASE_DIR for consistent project root
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def get_db_connection():
     try:
-        app_data_dir = os.path.join(os.getenv('APPDATA'), 'EcommerceApp')
-        os.makedirs(app_data_dir, exist_ok=True)
-        db_path = os.path.join(app_data_dir, 'ecommerce.db')
+        # Use environment variable for database path, default to project root
+        db_path = os.environ.get('DATABASE_PATH', os.path.join(BASE_DIR, 'ecommerce.db'))
+        
+        # Ensure the directory exists (only for non-root paths)
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            print(f"Creating directory: {db_dir}")
+            os.makedirs(db_dir, exist_ok=True)
+        
+        print(f"Connecting to database at: {db_path}")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        print("Database connection successful")
         return conn
     except sqlite3.Error as e:
         print(f"Database connection error: {e}")
         return None
+    except Exception as e:
+        print(f"Unexpected error in get_db_connection: {e}")
+        return None
 
 def init_db():
-    conn = None  # Initialize conn to None
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -87,7 +100,7 @@ def init_db():
                 FOREIGN KEY (product_id) REFERENCES products(id)
             )
         ''')
-               
+        
         sample_products = [
             ('Wireless Mouse', 29.99, 'Electronics', 100, '/static/images/wireless_mouse.jpg'),
             ('Graphic T-shirt', 15.99, 'Clothing', 200, '/static/images/graphic_t-shirt.jpg'),
@@ -126,13 +139,12 @@ def init_db():
             ('Humidifier', 39.99, 'Home Appliances', 45, '/static/images/humidifier.jpg'),
         ]
         
-         
         c.execute('SELECT COUNT(*) FROM products')
         if c.fetchone()[0] == 0:
             c.executemany('INSERT INTO products (name, price, category, stock, image) VALUES (?, ?, ?, ?, ?)', sample_products)
         
         conn.commit()
-    except (psycopg2.Error, sqlite3.Error) as e:
+    except sqlite3.Error as e:
         print(f"Database initialization error: {e}")
     finally:
         if conn is not None:

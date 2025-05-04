@@ -1,7 +1,7 @@
 # .gitignore
 
 # Python virtual environment
-mye-app/
+my-app/
 venv/
 env/
 
@@ -15,7 +15,7 @@ __pycache__/
 .env
 
 # SQLite database
-ecommerce.db
+!ecommerce.db
 
 # IDE and editor files
 .vscode/

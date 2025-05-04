@@ -14,16 +14,15 @@ from dotenv import load_dotenv
 import uuid
 from forms import LoginForm, RegisterForm, CheckoutForm, PaymentForm
 from pathlib import Path
-import webbrowser  # To open browser
+import webbrowser
 import sys
 import shutil
-import signal  # For graceful shutdown
+import signal
 
 # Handle PyInstaller runtime paths
 if getattr(sys, 'frozen', False):
-    # If running as a PyInstaller executable
     BASE_DIR = os.path.dirname(sys.executable)
-    os.chdir(BASE_DIR)  # Change working directory to executable location
+    os.chdir(BASE_DIR)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,34 +39,27 @@ csrf = CSRFProtect(app)
 app.config['CACHE_TYPE'] = 'SimpleCache'
 cache = Cache(app)
 
-# Global error handler to catch unhandled exceptions
+# Global error handler
 @app.errorhandler(Exception)
 def handle_exception(e):
     print(f"Unhandled exception: {str(e)}")
     import traceback
-    traceback.print_exc()  # Print the full traceback to the terminal
+    traceback.print_exc()
     return render_template('error.html', error='An unexpected error occurred: ' + str(e), cart_count=get_cart_count()), 500
 
 # Database Connection
 def get_db_connection():
     try:
-        # Use the persistent disk mounted at /app/data
-        app_data_dir = '/app/data'
-        print(f"Attempting to create directory: {app_data_dir}")
-        os.makedirs(app_data_dir, exist_ok=True)
-        db_path = os.path.join(app_data_dir, 'ecommerce.db')
-        print(f"Database path: {db_path}")
+        # Use environment variable for database path, default to project root for local development
+        db_path = os.environ.get('DATABASE_PATH', os.path.join(BASE_DIR, 'ecommerce.db'))
         
-        # If the database doesn't exist, copy a pre-populated one (if available)
-        if not os.path.exists(db_path):
-            source_db = os.path.join(BASE_DIR, 'ecommerce.db')
-            print(f"Checking for pre-populated database at: {source_db}")
-            if os.path.exists(source_db):
-                print(f"Copying pre-populated database from {source_db} to {db_path}")
-                shutil.copy(source_db, db_path)
-            else:
-                print(f"No pre-populated database found at {source_db}")
+        # Ensure the directory exists (only for non-root paths)
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            print(f"Creating directory: {db_dir}")
+            os.makedirs(db_dir, exist_ok=True)
         
+        # Log database path
         print(f"Connecting to database at: {db_path}")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -207,6 +199,7 @@ def init_db():
 def get_cart_count():
     if 'user_id' not in session:
         return 0
+    conn = None
     try:
         conn = get_db_connection()
         if conn is None:
@@ -218,15 +211,18 @@ def get_cart_count():
         return count or 0
     except (psycopg2.Error, sqlite3.Error):
         return 0
+    finally:
+        if conn is not None:
+            conn.close()
 
 # PyTorch NCF Recommendation Model
 class NCFModel(nn.Module):
-    def __init__(self, num_users, num_items, embedding_dim=64):  # Increase embedding_dim
+    def __init__(self, num_users, num_items, embedding_dim=64):
         super(NCFModel, self).__init__()
         self.user_embedding = nn.Embedding(num_users, embedding_dim)
         self.item_embedding = nn.Embedding(num_items, embedding_dim)
         self.fc_layers = nn.Sequential(
-            nn.Linear(embedding_dim * 2, 128),  # Increase layer size
+            nn.Linear(embedding_dim * 2, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -640,7 +636,6 @@ def recommendations():
             return jsonify({'error': 'Database connection failed'}), 500
         c = conn.cursor()
         
-        # Get user preferences
         c.execute('SELECT preferences FROM users WHERE id = ?', (session['user_id'],))
         user = c.fetchone()
         user_preference = user['preferences'] if user and user['preferences'] else None
@@ -651,7 +646,7 @@ def recommendations():
         c.execute('SELECT COUNT(*) FROM products')
         num_items = c.fetchone()[0] or 1
         
-        model = build_ncf_model(num_users, num_items, embedding_dim=64)  # Match embedding_dim
+        model = build_ncf_model(num_users, num_items, embedding_dim=64)
         model_path = os.path.join(BASE_DIR, 'model.pth')
         
         try:
@@ -715,19 +710,16 @@ def recommendations():
         with torch.no_grad():
             predictions = model(user_ids, product_ids_tensor).numpy().flatten()
         
-        # Adjust scores based on preferences
         adjusted_scores = []
         for pred_score, pid_adjusted in zip(predictions, product_ids_adjusted):
             pid = pid_adjusted + 1
             category = product_categories.get(pid, '')
-            # Boost score if the product's category matches the user's preference
             if user_preference and user_preference.lower() == category.lower():
-                adjusted_score = pred_score + 0.2  # Boost by 0.2
+                adjusted_score = pred_score + 0.2
             else:
                 adjusted_score = pred_score
             adjusted_scores.append((adjusted_score, pid_adjusted))
         
-        # Sort by adjusted scores
         top_ids = sorted(adjusted_scores, reverse=True)[:5]
         top_ids = [pid for _, pid in top_ids]
         top_ids = [pid + 1 for pid in top_ids]
@@ -769,25 +761,6 @@ def recommendations():
             'category': p['category'],
             'image': p['image'] or ''
         } for p in products])
-    finally:
-        if conn is not None:
-            conn.close()
-
-def get_cart_count():
-    if 'user_id' not in session:
-        return 0
-    conn = None
-    try:
-        conn = get_db_connection()
-        if conn is None:
-            return 0
-        c = conn.cursor()
-        c.execute('SELECT SUM(quantity) FROM cart WHERE user_id = ?', (session['user_id'],))
-        count = c.fetchone()[0]
-        conn.close()
-        return count or 0
-    except (psycopg2.Error, sqlite3.Error):
-        return 0
     finally:
         if conn is not None:
             conn.close()
@@ -872,7 +845,7 @@ def login():
         return render_template('login.html', form=form, cart_count=0)
     except Exception as e:
         print(f"Error in /login route: {e}")
-        raise e  # Re-raise the exception to get the full traceback
+        raise e
 
 @app.route('/logout')
 def logout():
@@ -890,10 +863,7 @@ def shutdown_server(signum, frame):
 
 if __name__ == '__main__':
     init_db()
-    # Register shutdown handler
     signal.signal(signal.SIGINT, shutdown_server)
     signal.signal(signal.SIGTERM, shutdown_server)
-    # Open browser
     port = int(os.getenv('Port', 10000))
-    # Run Flask app
     app.run(debug=True, host='0.0.0.0', port=port, use_reloader=False)
